@@ -32,6 +32,7 @@ from socket import create_connection
 from subprocess import call, check_output
 from sys import stderr, stdin
 from time import sleep
+
 try:
     from urllib.request import urlopen, Request, HTTPError
     from urllib.parse import urlparse
@@ -39,12 +40,10 @@ except ImportError:
     from urllib2 import urlopen, Request, HTTPError
     from urlparse import urlparse
 
-
 DIST_HOST = "dist.neo4j.org"
 
 
 class Downloader(object):
-
     def __init__(self, path, verbose=False):
         self.path = path
         self.verbose = verbose
@@ -53,10 +52,19 @@ class Downloader(object):
         if self.verbose:
             stderr.write(message)
 
-    def download_build(self, address, build_id, package):
+    def download_nightly_build(self, major, minor, version, edition, package_format):
+
+        package = "neo4j-%s-%s.%s-NIGHTLY-%s" % (edition, major, minor, package_format)
+        package = self.download_build(package)
+        self.write("\r\n")
+
+        return package
+
+    def download_build(self, package):
         """ Download from TeamCity build server.
         """
-        url = "https://%s/repository/download/%s/.lastSuccessful/%s" % (address, build_id, package)
+        # address, build_id,
+        url = path_join(getenv("TEAMCITY_HOST"), package)
         user = getenv("TEAMCITY_USER")
         password = getenv("TEAMCITY_PASSWORD")
         auth_token = b"Basic " + b64encode(("%s:%s" % (user, password)).encode("iso-8859-1"))
@@ -110,8 +118,17 @@ class Downloader(object):
         return package_path
 
     def download(self, edition, version, package_format):
+
+        # check the format of package format
+        if not (package_format in ("unix.tar.gz", "windows.zip")):
+            raise ValueError("Unknown format %r" % package_format)
+
+        # check the version
         version_parts = version.replace("-", ".").replace("_", ".").split(".")
-        if len(version_parts) == 3:
+        if len(version_parts) == 2:
+            major, minor = version_parts
+            return self.download_nightly_build(major, minor, version, edition, package_format)
+        elif len(version_parts) == 3:
             major, minor, patch = version_parts
             milestone = ""
         elif len(version_parts) == 4:
@@ -120,26 +137,15 @@ class Downloader(object):
             raise ValueError("Unrecognised version %r" % version)
 
         # Derive template and package version
-        if package_format in ("unix.tar.gz", "windows.zip"):
-            template = "neo4j-%s-%s-%s"
-            if milestone:
-                package_version = "%s.%s.%s-%s" % (major, minor, patch, milestone)
-            else:
-                package_version = "%s.%s.%s" % (major, minor, patch)
+        template = "neo4j-%s-%s-%s"
+        if milestone:
+            package_version = "%s.%s.%s-%s" % (major, minor, patch, milestone)
         else:
-            raise ValueError("Unknown format %r" % package_format)
+            package_version = "%s.%s.%s" % (major, minor, patch)
         package = template % (edition, package_version, package_format)
 
         dist_address = getenv("DIST_HOST", DIST_HOST)
-        build_address = getenv("TEAMCITY_HOST")
-        if build_address:
-            try:
-                build_id = "Neo4j%s%s_Packaging" % (major, minor)
-                package = self.download_build(build_address, build_id, package)
-            except HTTPError:
-                package = self.download_dist(dist_address, package)
-        else:
-            package = self.download_dist(dist_address, package)
+        package = self.download_dist(dist_address, package)
         self.write("\r\n")
 
         return package
@@ -172,7 +178,6 @@ def user_record(user, password):
 
 
 class Controller(object):
-
     package_format = None
 
     @classmethod
@@ -215,7 +220,6 @@ class Controller(object):
 
 
 class UnixController(Controller):
-
     package_format = "unix.tar.gz"
 
     @classmethod
@@ -295,7 +299,6 @@ class UnixController(Controller):
 
 
 class WindowsController(Controller):
-
     package_format = "windows.zip"
 
     @classmethod
@@ -416,7 +419,7 @@ def start():
         formatter_class=RawDescriptionHelpFormatter)
     parser.add_argument("-v", "--verbose", action="store_true",
                         help="show more detailed output")
-    parser.add_argument("home", nargs="?", default=".",help="Neo4j server directory (default: .)")
+    parser.add_argument("home", nargs="?", default=".", help="Neo4j server directory (default: .)")
     parsed = parser.parse_args()
     if platform.system() == "Windows":
         controller = WindowsController(parsed.home, 1 if parsed.verbose else 0)
